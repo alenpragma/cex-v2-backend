@@ -1,0 +1,9 @@
+parameters:
+  level: 7
+  paths:
+    - app
+  stubFiles:
+    - stubs/phpstan/translation.stub
+
+includes:
+    - phpstan-baseline.neon
