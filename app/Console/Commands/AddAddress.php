@@ -27,7 +27,7 @@ class AddAddress extends Command
     public function handle()
     {
 
-        $users= User::where('deposit_address',null)->get();
+        $users= User::get();
 
 
 
