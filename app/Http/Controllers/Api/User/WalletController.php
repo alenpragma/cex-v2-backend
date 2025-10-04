@@ -221,7 +221,7 @@ class WalletController extends Controller
             for($i =0; $i<=1; $i++){
                 try {
 
-                    $response = $client->post(env('DEPOSIT_URL'), [
+                    $response = $client->post('https://evm.blockmaster.info/api/deposit', [
                         'json' => [
                             'type' => $i == 0 ? 'native' : 'token',
                             'chain_id' => '9996',
