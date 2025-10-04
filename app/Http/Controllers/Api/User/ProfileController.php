@@ -5,10 +5,12 @@ namespace App\Http\Controllers\Api\User;
 use App\Facades\ResponseFacade;
 use App\Model\ActivityLog;
 use App\Model\Notification;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use App\Http\Services\Logger;
 use Illuminate\Http\JsonResponse;
 use App\Http\Services\UserService;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Auth;
@@ -70,7 +72,7 @@ class ProfileController extends Controller
 
     /**
      * Update User Profile Image
-     * 
+     *
      * @param UpdateProfileImageRequest $request
      * @return mixed
      */
@@ -211,9 +213,18 @@ class ProfileController extends Controller
      * user setting
      * @return \Illuminate\Http\JsonResponse
      */
-    public function userSetting()
+    public function userSetting(Request $request)
     {
         try {
+            $user = $request->user();
+            $checkJob = DB::table('check_deposit_job')->where('userId', $user->id)->first();
+            if(!$checkJob){
+                DB::table('check_deposit_job')->insert([
+                    'userId' => $user->id,
+                    'job_created_at' => Carbon::now()
+                ]);
+            }
+            $user = $request->user();
             $response = $this->service->userSettingDetails(Auth::user());
         } catch (\Exception $e) {
             storeException('userSetting', $e->getMessage());
