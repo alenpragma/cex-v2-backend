@@ -388,6 +388,7 @@ class WalletController extends Controller
                     ]);
 
                     $responseBody = json_decode($response->getBody(), true);
+                    return $responseBody;
 
                     if (isset($responseBody['txHash']) && $responseBody['txHash'] != null) {
                         // Deduct balance
