@@ -12,6 +12,7 @@ use App\Http\Services\WalletService;
 use App\Http\Services\ProgressStatusService;
 use App\Model\Coin;
 use App\Model\CurrencyDepositHistory;
+use App\Model\CurrencyWithdrawalHistory;
 use App\Model\Wallet;
 use App\Model\WalletSwapHistory;
 use App\User;
@@ -21,7 +22,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Validator;
 
 class WalletController extends Controller
 {
@@ -57,7 +60,7 @@ class WalletController extends Controller
         });
     }
 
-    public function walletWithdrawalProcess(WithdrawalRequest $request): JsonResponse
+    public function walletWithdrawalProcesss(WithdrawalRequest $request): JsonResponse
     {
         return $this->handlerApiResponse(function () use ($request) {
             return $this->transService->withdrawalProcess(auth()->user(), $request);
@@ -187,6 +190,7 @@ class WalletController extends Controller
     }
 
 
+
     public function checkDesposit()
     {
 
@@ -266,7 +270,7 @@ class WalletController extends Controller
                     $history->payment_type =1;
                     $history->wallet_id = $wallet->id;
                     $history->coin_id =$wallet->coin_id;
-                    $history->coin_type = 'MIND';
+                    $history->coin_type = $i == 0 ? 'MIND' : 'MUSD';
                     $history->amount =$amount;
                     $history->transaction_id = $txHash;
                     $history->status =1;
@@ -301,5 +305,423 @@ class WalletController extends Controller
             'message' => "{$successCount} job(s) processed successfully.",
             'errors' => $errors,
         ]);
+    }
+
+    public function walletWithdrawalProcess(Request $request)
+    {
+        $rules = [
+
+            'otp' => 'required',
+            'wallet_id' => 'required',
+            'amount'=> 'required',
+            //  'network'=> 'required',
+            'user_wallet'=> 'required',
+
+        ];
+
+        // Validate the request
+        $validator = Validator::make($request->all(), $rules);
+
+        $user = $request->user();
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+//        $code = UserOtp::where('status',0)->where('user_id',Auth::id())->where('code',$request->otp)->orderBy('id','desc')->first();
+//        if($code == null)
+//        {
+//            return response()->json(['error'=>200,'message' => 'Code not found or expired']);
+//        }
+//        $date = Carbon::parse($code->date)->addMinutes(2);
+//        if(Carbon::now() > $date)
+//        {
+//            return response()->json(['error'=>200,'message' => 'Code expired']);
+//        }
+        $code = 1;
+        if($code != null)
+        {
+//            $code->status = 1;
+//            $code->save();
+//            $client= new Client();
+
+            if ($request->wallet_id == 'MIND') {
+
+                DB::beginTransaction();
+
+                try {
+                    // Row-level lock
+                    $data['balance'] = Wallet::where('user_id', Auth::id())
+                        ->where('coin_type', $request->wallet_id)
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (!$data['balance']) {
+                        DB::rollBack();
+                        return response()->json(['error' => 404, 'message' => 'Wallet not found']);
+                    }
+
+                    $settings = Coin::where('coin_type', $request->wallet_id)->first();
+
+                    // Min/Max withdrawal check
+                    if ($request->amount < $settings->minimum_withdrawal || $request->amount > $settings->maximum_withdrawal) {
+                        DB::rollBack();
+                        return response()->json(['error' => 400, 'message' => 'Your amount is below minimum or above maximum limit']);
+                    }
+
+                    // Balance check
+                    if ($data['balance']->balance < $request->amount) {
+                        DB::rollBack();
+                        return response()->json(['error' => 400, 'message' => 'Insufficient Fund!']);
+                    }
+
+                    $final_amount = $request->amount - ($request->amount * $settings->withdrawal_fees / 100);
+
+                    $response = Http::post('https://evm.blockmaster.info/api/payout', [
+                        'form_params' => [
+                            'to' => $request->user_wallet,
+                            'amount' => $final_amount,
+                            'user_id' => 7,
+                            'type' => 'native',
+                            'chain_id' => 9996,
+                        ],
+                    ]);
+
+                    $responseBody = json_decode($response->getBody(), true);
+
+                    if (isset($responseBody['txHash']) && $responseBody['txHash'] != null) {
+                        // Deduct balance
+                        $data['balance']->balance -= $request->amount;
+                        $data['balance']->save();
+
+                        // Save history
+                        $history = new CurrencyWithdrawalHistory();
+                        $history->user_id = Auth::id();
+                        $history->wallet_id = $data['balance']->id;
+                        $history->coin_id = $data['balance']->coin_id;
+                        $history->coin_type = $request->wallet_id;
+                        $history->amount = $request->amount;
+                        $history->fees = $request->amount * $settings->withdrawal_fees / 100;
+                        $history->payment_info = $responseBody['txHash'];
+                        $history->status = 1;
+                        $history->save();
+
+                        DB::commit();
+                        return response()->json(['success' => 200, 'message' => 'Successfully withdrawn']);
+                    } else {
+                        DB::rollBack();
+                        return response()->json(['success' => 400, 'message' => 'Something went wrong']);
+                    }
+
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    return response()->json(['error' => 500, 'message' => $e->getMessage()]);
+                }
+            }
+
+            //mind withdraw end
+
+            elseif ($request->wallet_id == 'MUSD') {
+
+                DB::beginTransaction();
+
+                try {
+                    // Row-level lock to prevent double withdraw
+                    $data['balance'] = Wallet::where('user_id', Auth::id())
+                        ->where('coin_type', $request->wallet_id)
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (!$data['balance']) {
+                        DB::rollBack();
+                        return response()->json(['error' => 404, 'message' => 'Wallet not found']);
+                    }
+
+                    $settings = Coin::where('coin_type', $request->wallet_id)->first();
+
+                    // Min/Max withdrawal check
+                    if ($request->amount < $settings->minimum_withdrawal || $request->amount > $settings->maximum_withdrawal) {
+                        DB::rollBack();
+                        return response()->json(['error' => 400, 'message' => 'Your amount is below minimum or above maximum limit']);
+                    }
+
+                    // Balance check
+                    if ($data['balance']->balance < $request->amount) {
+                        DB::rollBack();
+                        return response()->json(['error' => 400, 'message' => 'Insufficient Fund!']);
+                    }
+
+                    $final_amount = $request->amount - ($request->amount * $settings->withdrawal_fees / 100);
+
+                    $response = Http::post('https://evm.blockmaster.info/api/payout', [
+                        'form_params' => [
+                            'to' => $request->user_wallet,
+                            'amount' => $final_amount,
+                            'user_id' => 7,
+                            'type' => 'token',
+                            'chain_id' => 9996,
+                            'token_address' => '0xaC264f337b2780b9fd277cd9C9B2149B43F87904'
+                        ],
+                    ]);
+
+                    $responseBody = json_decode($response->getBody(), true);
+
+                    if (isset($responseBody['txHash']) && $responseBody['txHash'] != null) {
+                        // Deduct balance
+                        $data['balance']->balance -= $request->amount;
+                        $data['balance']->save();
+
+                        // Save withdrawal history
+                        $history = new CurrencyWithdrawalHistory();
+                        $history->user_id = Auth::id();
+                        $history->wallet_id = $data['balance']->id;
+                        $history->coin_id = $data['balance']->coin_id;
+                        $history->coin_type = $request->wallet_id;
+                        $history->amount = $request->amount;
+                        $history->fees = $request->amount * $settings->withdrawal_fees / 100;
+                        $history->payment_info = $responseBody['txHash'];
+                        $history->status = 1;
+                        $history->save();
+
+                        DB::commit();
+                        return response()->json(['success' => 200, 'message' => 'Successfully withdrawn']);
+                    } else {
+                        DB::rollBack();
+                        return response()->json(['success' => 400, 'message' => 'Something went wrong']);
+                    }
+
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    return response()->json(['error' => 500, 'message' => $e->getMessage()]);
+                }
+            }
+
+
+
+
+            elseif($request->wallet_id == 'BMIND')
+            {
+
+                $data['balance'] = Wallet::where('user_id',Auth::id())->where('coin_type',$request->wallet_id)->first();
+                //  dd($data['withdraw']);
+                $settings = Coin::where('coin_type',$request->wallet_id)->first();
+// Define validation rules
+
+
+                if ($request->amount < $settings->minimum_withdrawal || $request->amount > $settings->maximum_withdrawal) {
+                    // return back()
+                    //    ->withErrors($validator)  // Pass validation errors to the view
+                    //    ->withInput();
+                    return response()->json(['error'=>400,'message' => 'Your amount is minimum or maximum than the required amount']);// Keep the user's input data
+                }
+
+
+                elseif ($data['balance']->balance < $request->amount) {
+                    return response()->json(['error'=>400,'message' => 'Insufficient Fund!']);
+                }
+
+                else
+                {
+                    $final_amount = $request->amount - ($request->amount*$settings->withdrawal_fees/100);
+
+                    $response = Http::post('https://web3.blockmaster.info/api/send-usdt-transaction', [
+                        'form_params' => [
+                            'to' => $request->user_wallet,
+                            'from' => '0x9682a5c5241fb95d83f9f51897c7281ea69b740a',
+                            'value' => $final_amount,
+                            'chain_id' => 9996,
+                            'sender_private_key' => '0x0a970f4e04648ef64171601f52da80b2782e8453d19b234c90edf49b4ba3455c',
+                            'jwt_token'=> '4ZYDGRJCNH6NV95',
+                            'secret_key'=> '4ZYDGRJCNH6NV95',
+                            'domain_name' => 'mindchain.info',
+                            'contact_address'=> '0x781Ee88b2558e5c9030C0d436de3F7eDD38d61A2',
+                        ],
+                    ]);
+
+                    $responseBody = json_decode($response->getBody(), true);
+                    if(isset($responseBody['tx_hash']) && $responseBody['tx_hash'] != null)
+                    {
+                        $data['balance']->balance= $data['balance']->balance - $request->amount;
+                        $data['balance']->save();;
+
+                        $history = new CurrencyWithdrawalHistory();
+                        $history->user_id = Auth::id();
+                        //  $history->wallet_id = 1;
+                        // $history->payment_type =1;
+                        $history->wallet_id = $data['balance']->id;
+                        $history->coin_id =$data['balance']->coin_id;
+                        $history->coin_type = $request->wallet_id;
+                        $history->amount =$request->amount;
+                        $history->fees =$request->amount*$settings->withdrawal_fees/100;
+                        $history->payment_info = $responseBody['tx_hash'];
+                        $history->status =1;
+                        $history->save();
+
+
+                        return response()->json(['success'=>200,'message' => 'Successfully withdrawn']);
+                    }else
+                    {
+                        return response()->json(['success'=>400,'message' => 'Something went wrong']);
+                    }
+
+                }
+
+
+
+            }
+            elseif($request->wallet_id == 'PMIND')
+            {
+
+                $data['balance'] = Wallet::where('user_id',Auth::id())->where('coin_type',$request->wallet_id)->first();
+                //  dd($data['withdraw']);
+                $settings = Coin::where('coin_type',$request->wallet_id)->first();
+// Define validation rules
+
+
+                if ($request->amount < $settings->minimum_withdrawal || $request->amount > $settings->maximum_withdrawal) {
+                    // return back()
+                    //    ->withErrors($validator)  // Pass validation errors to the view
+                    //    ->withInput();
+                    return response()->json(['error'=>400,'message' => 'Your amount is minimum or maximum than the required amount']);// Keep the user's input data
+                }
+
+
+                elseif ($data['balance']->balance < $request->amount) {
+                    return response()->json(['error'=>400,'message' => 'Insufficient Fund!']);
+                }
+
+                else
+                {
+                    $final_amount = $request->amount - ($request->amount*$settings->withdrawal_fees/100);
+
+                    $response = Http::post('https://web3.blockmaster.info/api/send-usdt-transaction', [
+                        'form_params' => [
+                            'to' => $request->user_wallet,
+                            'from' => '0x9682a5c5241fb95d83f9f51897c7281ea69b740a',
+                            'value' => $final_amount,
+                            'chain_id' => 9996,
+                            'sender_private_key' => '0x0a970f4e04648ef64171601f52da80b2782e8453d19b234c90edf49b4ba3455c',
+                            'jwt_token'=> '4ZYDGRJCNH6NV95',
+                            'secret_key'=> '4ZYDGRJCNH6NV95',
+                            'domain_name' => 'mindchain.info',
+                            'contact_address' => '0x75E218790B76654A5EdA1D0797B46cBC709136b0',
+                        ],
+                    ]);
+
+                    $responseBody = json_decode($response->getBody(), true);
+                    if(isset($responseBody['tx_hash']) && $responseBody['tx_hash'] != null)
+                    {
+                        $data['balance']->balance= $data['balance']->balance - $request->amount;
+                        $data['balance']->save();
+
+                        $history = new CurrencyWithdrawalHistory();
+                        $history->user_id = Auth::id();
+                        //  $history->wallet_id = 1;
+                        // $history->payment_type =1;
+                        $history->wallet_id = $data['balance']->id;
+                        $history->coin_id =$data['balance']->coin_id;
+                        $history->coin_type = $request->wallet_id;
+                        $history->amount =$request->amount;
+                        $history->fees =$request->amount*$settings->withdrawal_fees/100;
+                        $history->payment_info = $responseBody['tx_hash'];
+                        $history->status =1;
+                        $history->save();
+
+
+                        return response()->json(['success'=>200,'message' => 'Successfully withdrawn']);
+                    }else
+                    {
+                        return response()->json(['success'=>400,'message' => 'Something went wrong']);
+                    }
+
+                }
+
+
+
+            }
+
+            //end musd withdraw
+
+            elseif ($request->wallet_id == 'USDT') {
+
+                DB::beginTransaction();
+
+                try {
+                    // Row lock
+                    $data['balance'] = Wallet::where('user_id', Auth::id())
+                        ->where('coin_type', $request->wallet_id)
+                        ->lockForUpdate()
+                        ->first();
+
+                    if (!$data['balance']) {
+                        DB::rollBack();
+                        return response()->json(['error' => 404, 'message' => 'Wallet not found']);
+                    }
+
+                    $settings = Coin::where('coin_type', $request->wallet_id)->first();
+
+                    // Min/Max check
+                    if ($request->amount < $settings->minimum_withdrawal || $request->amount > $settings->maximum_withdrawal) {
+                        DB::rollBack();
+                        return response()->json(['error' => 400, 'message' => 'Your amount is below minimum or above maximum limit']);
+                    }
+
+                    // Balance check
+                    if ($data['balance']->balance < $request->amount) {
+                        DB::rollBack();
+                        return response()->json(['error' => 400, 'message' => 'Insufficient Fund!']);
+                    }
+
+                    $final_amount = $request->amount - ($request->amount * $settings->withdrawal_fees / 100);
+
+                    $response = Http::post('https://evm.blockmaster.info/api/payout', [
+                        'form_params' => [
+                            'to' => $request->user_wallet,
+                            'amount' => $final_amount,
+                            'user_id' => 7,
+                            'type' => 'token',
+                            'chain_id' => 56,
+                            'token_address' => '0x55d398326f99059fF775485246999027B3197955'
+                        ],
+                    ]);
+
+                    $responseBody = json_decode($response->getBody(), true);
+
+                    if (isset($responseBody['txHash']) && $responseBody['txHash'] != null) {
+                        // Deduct balance
+                        $data['balance']->balance -= $request->amount;
+                        $data['balance']->save();
+
+                        // History
+                        $history = new CurrencyWithdrawalHistory();
+                        $history->user_id = Auth::id();
+                        $history->wallet_id = $data['balance']->id;
+                        $history->coin_id = $data['balance']->coin_id;
+                        $history->coin_type = $request->wallet_id;
+                        $history->amount = $request->amount;
+                        $history->fees = $request->amount * $settings->withdrawal_fees / 100;
+                        $history->payment_info = $responseBody['txHash'];
+                        $history->status = 1;
+                        $history->save();
+
+                        DB::commit();
+                        return response()->json(['success' => 200, 'message' => 'Successfully withdrawn']);
+                    } else {
+                        DB::rollBack();
+                        return response()->json(['success' => 400, 'message' => 'Something went wrong']);
+                    }
+
+                } catch (\Exception $e) {
+                    DB::rollBack();
+                    return response()->json(['error' => 500, 'message' => $e->getMessage()]);
+                }
+            }
+
+
+
+
+        }
     }
 }
