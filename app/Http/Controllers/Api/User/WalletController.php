@@ -310,9 +310,7 @@ class WalletController extends Controller
     public function walletWithdrawalProcess(Request $request)
     {
         $rules = [
-
-            'otp' => 'required',
-            'wallet_id' => 'required',
+            'coin_type' => 'required',
             'amount'=> 'required',
             //  'network'=> 'required',
             'user_wallet'=> 'required',
@@ -347,14 +345,14 @@ class WalletController extends Controller
 //            $code->save();
 //            $client= new Client();
 
-            if ($request->wallet_id == 'MIND') {
+            if ($request->coin_type == 'MIND') {
 
                 DB::beginTransaction();
 
                 try {
                     // Row-level lock
                     $data['balance'] = Wallet::where('user_id', Auth::id())
-                        ->where('coin_type', $request->wallet_id)
+                        ->where('coin_type', $request->coin_type)
                         ->lockForUpdate()
                         ->first();
 
@@ -363,7 +361,7 @@ class WalletController extends Controller
                         return response()->json(['error' => 404, 'message' => 'Wallet not found']);
                     }
 
-                    $settings = Coin::where('coin_type', $request->wallet_id)->first();
+                    $settings = Coin::where('coin_type', $request->coin_type)->first();
 
                     // Min/Max withdrawal check
                     if ($request->amount < $settings->minimum_withdrawal || $request->amount > $settings->maximum_withdrawal) {
@@ -381,7 +379,7 @@ class WalletController extends Controller
 
                     $response = Http::post('https://evm.blockmaster.info/api/payout', [
                         'form_params' => [
-                            'to' => $request->user_wallet,
+                            'to' => $request->address,
                             'amount' => $final_amount,
                             'user_id' => 7,
                             'type' => 'native',
@@ -401,7 +399,7 @@ class WalletController extends Controller
                         $history->user_id = Auth::id();
                         $history->wallet_id = $data['balance']->id;
                         $history->coin_id = $data['balance']->coin_id;
-                        $history->coin_type = $request->wallet_id;
+                        $history->coin_type = $request->coin_type;
                         $history->amount = $request->amount;
                         $history->fees = $request->amount * $settings->withdrawal_fees / 100;
                         $history->payment_info = $responseBody['txHash'];
@@ -423,14 +421,14 @@ class WalletController extends Controller
 
             //mind withdraw end
 
-            elseif ($request->wallet_id == 'MUSD') {
+            elseif ($request->coin_type == 'MUSD') {
 
                 DB::beginTransaction();
 
                 try {
                     // Row-level lock to prevent double withdraw
                     $data['balance'] = Wallet::where('user_id', Auth::id())
-                        ->where('coin_type', $request->wallet_id)
+                        ->where('coin_type', $request->coin_type)
                         ->lockForUpdate()
                         ->first();
 
@@ -439,7 +437,7 @@ class WalletController extends Controller
                         return response()->json(['error' => 404, 'message' => 'Wallet not found']);
                     }
 
-                    $settings = Coin::where('coin_type', $request->wallet_id)->first();
+                    $settings = Coin::where('coin_type', $request->coin_type)->first();
 
                     // Min/Max withdrawal check
                     if ($request->amount < $settings->minimum_withdrawal || $request->amount > $settings->maximum_withdrawal) {
@@ -457,7 +455,7 @@ class WalletController extends Controller
 
                     $response = Http::post('https://evm.blockmaster.info/api/payout', [
                         'form_params' => [
-                            'to' => $request->user_wallet,
+                            'to' => $request->address,
                             'amount' => $final_amount,
                             'user_id' => 7,
                             'type' => 'token',
@@ -478,7 +476,7 @@ class WalletController extends Controller
                         $history->user_id = Auth::id();
                         $history->wallet_id = $data['balance']->id;
                         $history->coin_id = $data['balance']->coin_id;
-                        $history->coin_type = $request->wallet_id;
+                        $history->coin_type = $request->coin_type;
                         $history->amount = $request->amount;
                         $history->fees = $request->amount * $settings->withdrawal_fees / 100;
                         $history->payment_info = $responseBody['txHash'];
@@ -501,12 +499,12 @@ class WalletController extends Controller
 
 
 
-            elseif($request->wallet_id == 'BMIND')
+            elseif($request->coin_type == 'BMIND')
             {
 
-                $data['balance'] = Wallet::where('user_id',Auth::id())->where('coin_type',$request->wallet_id)->first();
+                $data['balance'] = Wallet::where('user_id',Auth::id())->where('coin_type',$request->coin_type)->first();
                 //  dd($data['withdraw']);
-                $settings = Coin::where('coin_type',$request->wallet_id)->first();
+                $settings = Coin::where('coin_type',$request->coin_type)->first();
 // Define validation rules
 
 
@@ -528,7 +526,7 @@ class WalletController extends Controller
 
                     $response = Http::post('https://web3.blockmaster.info/api/send-usdt-transaction', [
                         'form_params' => [
-                            'to' => $request->user_wallet,
+                            'to' => $request->address,
                             'from' => '0x9682a5c5241fb95d83f9f51897c7281ea69b740a',
                             'value' => $final_amount,
                             'chain_id' => 9996,
@@ -552,7 +550,7 @@ class WalletController extends Controller
                         // $history->payment_type =1;
                         $history->wallet_id = $data['balance']->id;
                         $history->coin_id =$data['balance']->coin_id;
-                        $history->coin_type = $request->wallet_id;
+                        $history->coin_type = $request->coin_type;
                         $history->amount =$request->amount;
                         $history->fees =$request->amount*$settings->withdrawal_fees/100;
                         $history->payment_info = $responseBody['tx_hash'];
@@ -571,12 +569,12 @@ class WalletController extends Controller
 
 
             }
-            elseif($request->wallet_id == 'PMIND')
+            elseif($request->coin_type == 'PMIND')
             {
 
-                $data['balance'] = Wallet::where('user_id',Auth::id())->where('coin_type',$request->wallet_id)->first();
+                $data['balance'] = Wallet::where('user_id',Auth::id())->where('coin_type',$request->coin_type)->first();
                 //  dd($data['withdraw']);
-                $settings = Coin::where('coin_type',$request->wallet_id)->first();
+                $settings = Coin::where('coin_type',$request->coin_type)->first();
 // Define validation rules
 
 
@@ -598,7 +596,7 @@ class WalletController extends Controller
 
                     $response = Http::post('https://web3.blockmaster.info/api/send-usdt-transaction', [
                         'form_params' => [
-                            'to' => $request->user_wallet,
+                            'to' => $request->address,
                             'from' => '0x9682a5c5241fb95d83f9f51897c7281ea69b740a',
                             'value' => $final_amount,
                             'chain_id' => 9996,
@@ -622,7 +620,7 @@ class WalletController extends Controller
                         // $history->payment_type =1;
                         $history->wallet_id = $data['balance']->id;
                         $history->coin_id =$data['balance']->coin_id;
-                        $history->coin_type = $request->wallet_id;
+                        $history->coin_type = $request->coin_type;
                         $history->amount =$request->amount;
                         $history->fees =$request->amount*$settings->withdrawal_fees/100;
                         $history->payment_info = $responseBody['tx_hash'];
@@ -644,14 +642,14 @@ class WalletController extends Controller
 
             //end musd withdraw
 
-            elseif ($request->wallet_id == 'USDT') {
+            elseif ($request->coin_type == 'USDT') {
 
                 DB::beginTransaction();
 
                 try {
                     // Row lock
                     $data['balance'] = Wallet::where('user_id', Auth::id())
-                        ->where('coin_type', $request->wallet_id)
+                        ->where('coin_type', $request->coin_type)
                         ->lockForUpdate()
                         ->first();
 
@@ -660,7 +658,7 @@ class WalletController extends Controller
                         return response()->json(['error' => 404, 'message' => 'Wallet not found']);
                     }
 
-                    $settings = Coin::where('coin_type', $request->wallet_id)->first();
+                    $settings = Coin::where('coin_type', $request->coin_type)->first();
 
                     // Min/Max check
                     if ($request->amount < $settings->minimum_withdrawal || $request->amount > $settings->maximum_withdrawal) {
@@ -678,7 +676,7 @@ class WalletController extends Controller
 
                     $response = Http::post('https://evm.blockmaster.info/api/payout', [
                         'form_params' => [
-                            'to' => $request->user_wallet,
+                            'to' => $request->address,
                             'amount' => $final_amount,
                             'user_id' => 7,
                             'type' => 'token',
