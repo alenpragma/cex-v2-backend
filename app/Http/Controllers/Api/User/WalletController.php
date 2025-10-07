@@ -313,7 +313,7 @@ class WalletController extends Controller
             'coin_type' => 'required',
             'amount'=> 'required',
             //  'network'=> 'required',
-            'user_wallet'=> 'required',
+            'address'=> 'required',
 
         ];
 
