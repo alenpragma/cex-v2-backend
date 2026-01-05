@@ -343,7 +343,7 @@ class WalletController extends Controller
         {
 //            $code->status = 1;
 //            $code->save();
-//            $client= new Client();
+            $client= new Client();
 
             if ($request->coin_type == 'MIND') {
 
@@ -377,7 +377,7 @@ class WalletController extends Controller
 
                     $final_amount = $request->amount - ($request->amount * $settings->withdrawal_fees / 100);
 
-                    $response = Http::post('https://evm.blockmaster.info/api/payout', [
+                    $response = $client->post('https://evm.blockmaster.info/api/payout', [
                         'form_params' => [
                             'to' => $request->address,
                             'amount' => $final_amount,
@@ -388,7 +388,6 @@ class WalletController extends Controller
                     ]);
 
                     $responseBody = json_decode($response->getBody(), true);
-                    return $responseBody;
 
                     if (isset($responseBody['txHash']) && $responseBody['txHash'] != null) {
                         // Deduct balance
@@ -723,4 +722,164 @@ class WalletController extends Controller
 
         }
     }
+
+
+    // user to user transfer 
+
+    public function userToUserTransfer(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'receiver'  => 'required|string',
+            'coin_type' => 'required|string|exists:wallets,coin_type',
+            'amount'    => 'required|numeric|min:0.0001',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors'  => $validator->errors()
+            ], 422);
+        }
+
+        $sender = auth()->user();
+
+        // Receiver find by email OR deposit_address (users table)
+        $receiver = User::where('email', $request->receiver)
+            ->orWhere('deposit_address', $request->receiver)
+            ->first();
+
+        if (!$receiver) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Receiver not found'
+            ], 404);
+        }
+
+        if ($receiver->id === $sender->id) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot transfer to yourself'
+            ], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+
+            // Sender wallet
+            $senderWallet = Wallet::where('user_id', $sender->id)
+                ->where('coin_type', $request->coin_type)
+                ->lockForUpdate()
+                ->first();
+
+            // Receiver wallet
+            $receiverWallet = Wallet::where('user_id', $receiver->id)
+                ->where('coin_type', $request->coin_type)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$senderWallet || !$receiverWallet) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Wallet not found'
+                ], 404);
+            }
+
+            $amount = (float) $request->amount;
+
+            if ($senderWallet->balance < $amount) {
+                DB::rollBack();
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Insufficient balance'
+                ], 400);
+            }
+
+            $senderWallet->balance   -= $amount;
+            $receiverWallet->balance += $amount;
+
+            $senderWallet->save();
+            $receiverWallet->save();
+
+            // Save transfer history
+            DB::table('user_transfers')->insert([
+                'from_user_id'       => $sender->id,
+                'to_user_id'         => $receiver->id,
+                'wallet_id'          => $senderWallet->id,
+                'receiver_wallet_id' => $receiverWallet->id,
+                'coin_type'          => $request->coin_type,
+                'amount'             => $amount,
+                'fees'               => 0,
+                'status'             => 1,
+                'created_at'         => now(),
+                'updated_at'         => now(),
+            ]);
+
+            DB::commit();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Transfer successful'
+            ]);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Something went wrong'
+            ], 500);
+        }
+    }
+
+    public function userToUserTransferHistory(Request $request): JsonResponse
+    {
+        $user = auth()->user();
+
+        $query = DB::table('user_transfers as ut')
+            ->join('users as sender', 'sender.id', '=', 'ut.from_user_id')
+            ->join('users as receiver', 'receiver.id', '=', 'ut.to_user_id')
+            ->where(function ($q) use ($user) {
+                $q->where('ut.from_user_id', $user->id)
+                ->orWhere('ut.to_user_id', $user->id);
+            })
+            ->select([
+                'ut.id',
+                'ut.coin_type',
+                'ut.amount',
+                'ut.fees',
+                'ut.status',
+                'ut.created_at',
+
+                'sender.id as sender_id',
+                'sender.email as sender_email',
+
+                'receiver.id as receiver_id',
+                'receiver.email as receiver_email',
+
+                DB::raw("
+                    CASE 
+                        WHEN ut.from_user_id = {$user->id} 
+                        THEN 'sent'
+                        ELSE 'received'
+                    END as type
+                ")
+            ])
+            ->orderBy('ut.id', 'desc');
+
+        // Optional filter by coin_type
+        if ($request->filled('coin_type')) {
+            $query->where('ut.coin_type', $request->coin_type);
+        }
+
+        $histories = $query->paginate(15);
+
+        return response()->json([
+            'success' => true,
+            'data'    => $histories
+        ]);
+    }
+
+
+
 }

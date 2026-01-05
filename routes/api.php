@@ -293,6 +293,9 @@ Route::group(['middleware' => 'maintenanceMode'], function () {
             Route::post('wallet-withdrawal-process', 'WalletController@walletWithdrawalProcess')->middleware('kycVerification:kyc_withdrawal_setting_status');
             Route::post('get-wallet-network-address', 'WalletController@getWalletNetworkAddress');
 
+            Route::post('user-to-user-transfer','WalletController@userToUserTransfer')->name('userToUserTransfer');
+            Route::get('intenal-transfer-history','WalletController@userToUserTransferHistory')->name('userToUserTransferHistory');
+
             //Dashboard and reports
             Route::get('get-all-buy-orders-app', 'ExchangeController@getExchangeAllBuyOrdersApp')->name('getExchangeAllBuyOrdersApp');
             Route::get('get-all-sell-orders-app', 'ExchangeController@getExchangeAllSellOrdersApp')->name('getExchangeAllSellOrdersApp');
